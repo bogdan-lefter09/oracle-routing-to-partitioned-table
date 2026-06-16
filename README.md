@@ -53,7 +53,7 @@ Users still query/update `test_events`, but the triggers silently route data to 
 ## Considerations
 ⚠️ Tested in isolation only - further validation with your application stack is recommended (for example, ORM integration).  
 ⚠️ Query execution plans will change.  
-⚠️ Indices strategy may need revision (consider local indexes on the partitioned table)  
+⚠️ Indices strategy may need revision (consider local indexes on the partitioned table).  
 ⚠️ Test with your actual workload — some queries may benefit, others may regress.
 
 
