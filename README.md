@@ -46,7 +46,16 @@ Users still query/update `test_events`, but the triggers silently route data to 
 ✅ Old data stays accessible (archived table)  
 ✅ Single query point for users (the VIEW)  
 ✅ Automatic routing (triggers do the work)  
-✅ Space considerations (you can drop partitions after a specific period)
+✅ Space considerations (you can drop partitions after a specific period)  
+✅ Fast transformation — only structures are modified, no data copying (typically completes in minutes)
+
+
+## Considerations
+⚠️ Tested in isolation only - further validation with your application stack is recommended (for example, ORM integration).  
+⚠️ Query execution plans will change.  
+⚠️ Indices strategy may need revision (consider local indexes on the partitioned table)  
+⚠️ Test with your actual workload — some queries may benefit, others may regress.
+
 
 ## Architecture BEFORE
 
@@ -92,5 +101,3 @@ flowchart
 - The cutoff is currently `SYSDATE - 90`; change it to `SYSDATE - 120` if you need a 120-day retention window.
 - The scripts drop objects at the top, so use them carefully outside a test environment.
 - Update the hard-coded partition boundary in `partition.sql` to match your deployment date range.
-
-> **⚠️ Important:** Tested in isolation only - further validation with your application stack is recommended (for example, ORM integration).
