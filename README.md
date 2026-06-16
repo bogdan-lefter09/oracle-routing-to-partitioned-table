@@ -1,110 +1,96 @@
-# oracle-routing-to-partitioned-table
+## The Problem
+You have an unpartitioned table with millions (potentially billions) of old events piling up. The recent events (last 90 days) are queried constantly, but older data is not needed anymore due to compliance requirements. A huge table gets slow, and traditional row deletion takes a long time and impacts performance.
 
-## Problem context
+## The Solution: Two Tables + Routing
 
-This repository shows how to transform a single unpartitioned Oracle table into a hybrid design that keeps recent event data in a partitioned table while moving older data into a legacy table.
+**Before:**
+```
+test_events (2 million+ rows)
+├─ Recent data (frequently queried)
+└─ Old data (will not be needed in the future)
+```
 
-The source system starts with one table that stores all rows. The goal is to retain only the last 90–120 days of data in the partitioned table for performance, while still keeping older data available through a unified view.
+**After:**
+```
+test_events (VIEW - appears like one table to users)
+├─ test_events_part (recent data: last 90 days)
+│  └─ Partitioned by month for speed (could be paritioned by day / week if needed)
+└─ test_events_old (old table)
+```
 
-Use case:
-- keep recent rows fast and easy to query,
-- avoid growing the active table indefinitely,
-- preserve read access to historical data through a single logical object.
+## The Three Scripts
 
-## Table structure
+### 1. **create.sql** — Setup
+- Creates an initial table
+- Populates it with 2 million fake rows (for testing)
 
-### Original table
+### 2. **partition.sql** — The Transformation
+- Renames the original table to `test_events_old` (old data)
+- Creates a new partitioned table `test_events_part` (recent data)
+- Creates a VIEW named `test_events` that shows both tables combined (using a union)
+- Adds **INSTEAD OF triggers** (automatic routers):
+  - **INSERT:** New rows go to `test_events_part` if they're ≤ 90 days old, otherwise to `test_events_old`
+  - **UPDATE/DELETE:** Routes to the correct table based on the row's date
 
-`test_events`
-- `event_id NUMBER PRIMARY KEY`
-- `user_id NUMBER`
-- `event_data VARCHAR2(4000)`
-- `created_date DATE DEFAULT SYSDATE`
-- `event_type VARCHAR2(100)`
+Users still query/update `test_events`, but the triggers silently route data to the right physical table.
 
-This is the initial unpartitioned table used for inserts and queries.
+### 3. **test.sql** — Verification
+- Inserts test rows with different dates
+- Confirms they ended up in the correct table:
+  - Today's date → `test_events_part` ✓
+  - 30 days ago → `test_events_part` ✓
+  - 100 days ago → `test_events_old` ✓
 
-### Partitioned table
+## Why This Helps
+✅ Recent data stays fast (smaller, partitioned table)  
+✅ Old data stays accessible (archived table)  
+✅ Single query point for users (the VIEW)  
+✅ Automatic routing (triggers do the work)  
+✅ Space considerations (you can drop partitions after a specific period)
 
-`test_events_part`
-- columns: `event_id`, `user_id`, `event_data`, `created_date`, `event_type`
-- partitioned by `RANGE(created_date)`
-- monthly `INTERVAL (NUMTOYMINTERVAL(1, 'MONTH'))`
-- initial partition: `p_old VALUES LESS THAN (DATE '2026-06-01')`
-
-This table stores the most recent rows and uses interval partitioning for efficient date-based retention.
-
-### Legacy table
-
-`test_events_old`
-- same schema as `test_events`
-- stores rows older than the recent retention window
-
-### Unified view
-
-`test_events`
-- a `UNION ALL` view over `test_events_old` and `test_events_part`
-- used as the logical access point for reads and write routing triggers
-
-## Scripts
-
-### `create.sql`
-
-Purpose: create the initial source table and optionally populate it with sample data.
-
-What it does:
-- drops `TEST_EVENTS` if it exists,
-- creates `test_events` with the original schema,
-- inserts sample rows for validation / demonstration.
-
-### `partition.sql`
-
-Purpose: convert the existing schema into a partitioned recent-data table plus legacy archive table, then install routing triggers.
-
-What it does:
-- drops existing triggers, view, and tables used by the sample setup,
-- creates `test_events_part` as an interval-partitioned table,
-- renames `test_events` to `test_events_old`,
-- creates the unified view `test_events`,
-- installs `INSTEAD OF` triggers on the view for `INSERT`, `DELETE`, and `UPDATE`.
-
-Routing logic:
-- rows with `created_date >= SYSDATE - 90` are routed to `test_events_part`,
-- older rows are routed to `test_events_old`.
-
-### `test.sql`
-
-Purpose: verify that the routing and partitioning behavior works as intended.
-
-What it does:
-- inserts controlled test rows,
-- commits the changes,
-- checks row counts in `test_events_old`, `test_events_part`, and the unified view,
-- inspects partition metadata for `TEST_EVENTS_PART`.
-
-## Architecture before / after
+## Architecture BEFORE
 
 ```mermaid
 flowchart LR
     subgraph BEFORE
-        A[test_events<br/>unpartitioned table]
+        A["test_events<br/>(unpartitioned table)"]
     end
-
-    subgraph AFTER
-        B[test_events_old<br/>legacy archive]
-        C[test_events_part<br/>partitioned recent data]
-        D[test_events<br/>view]
-        E[INSTEAD OF triggers]
-    end
-
-    %% Invisible edge to keep BEFORE on the left and AFTER on the right
-    A -.-> B
-    D --> B
-    D --> C
 ```
 
-## Notes
+## Architecture AFTER
+
+```mermaid
+flowchart
+    subgraph AFTER_SELECT["SELECT / READ"]
+        D1["test_events<br/>(view)"]
+        UNION["UNION<br/>(combines data)"]
+        B1["test_events_old<br/>(older data)"]
+        C1["test_events_part<br/>(recent data)"]
+    end
+
+    D1 --> UNION
+    UNION --> B1
+    UNION --> C1
+```
+
+```mermaid
+flowchart
+    subgraph AFTER_WRITE["INSERT / UPDATE / DELETE"]
+        D2["test_events<br/>(view)"]
+        E["INSTEAD OF triggers<br/>(routes by date)"]
+        B2["test_events_old<br/>(older data)"]
+        C2["test_events_part<br/>(recent data)"]
+    end
+
+    D2 --> E
+    E --> B2
+    E --> C2
+```
+
+## Notes 
 
 - The cutoff is currently `SYSDATE - 90`; change it to `SYSDATE - 120` if you need a 120-day retention window.
 - The scripts drop objects at the top, so use them carefully outside a test environment.
 - Update the hard-coded partition boundary in `partition.sql` to match your deployment date range.
+
+> **⚠️ Important:** Tested in isolation only - further validation with your application stack is recommended (for example, ORM integration).
