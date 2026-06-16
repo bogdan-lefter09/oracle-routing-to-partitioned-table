@@ -18,7 +18,7 @@ test_events (VIEW - appears like one table to users)
 └─ test_events_old (old table)
 ```
 
-## The Three Scripts
+## The Example Scripts
 
 ### 1. **create.sql** — Setup
 - Creates an initial table
@@ -40,6 +40,12 @@ Users still query/update `test_events`, but the triggers silently route data to 
   - Today's date → `test_events_part` ✓
   - 30 days ago → `test_events_part` ✓
   - 100 days ago → `test_events_old` ✓
+
+### 4. **rollback.sql** — Revert to the original state
+- Removes the view and routing triggers
+- Renames `test_events_old` back to `test_events`
+- Moves rows from `test_events_part` back into `test_events`
+- Drops `test_events_part`
 
 ## Why This Helps
 ✅ Recent data stays fast (smaller, partitioned table)  
